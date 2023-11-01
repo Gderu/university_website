@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from flask import session
+from flask import session, json
 from flaskr.db import get_db
 from werkzeug.security import check_password_hash
 
@@ -123,7 +123,7 @@ def test_add_user(auth, client, id, password, name, mail, role, is_student, shou
         else:
             assert response.status_code == 200
             db = get_db()
-            course = db.execute("SELECT * FROM user WHERE id = ?", (id,)).fetchone()
+            course = db.execute("SELECT * FROM user_data WHERE id = ?", (id,)).fetchone()
             course_check = {key: str(val) for key, val in dict(course).items() if key != 'password'}
             data_check = {key: val for key, val in data.items() if key != 'password'}
             assert course_check == data_check
@@ -148,7 +148,7 @@ def test_update_user(auth, client):
         print(json.loads(response.data))
         assert response.status_code == 200
         db = get_db()
-        name = db.execute("SELECT name FROM user WHERE id = ?", (data['id'],)).fetchone()[0]
+        name = db.execute("SELECT name FROM user_data WHERE id = ?", (data['id'],)).fetchone()[0]
         assert name == 'Golda Meir'
         response = client.put('/admin/update-user', data={'id': '111111113', 'name': 'God'})
         assert response.status_code == 404
@@ -175,4 +175,39 @@ def test_delete_course(auth, client):
         assert response.status_code == 404
 
         db = get_db()
-        assert db.execute("SELECT name FROM user WHERE id = ?", (data['id'],)).fetchone() is None
+        assert db.execute("SELECT name FROM user_data WHERE id = ?", (data['id'],)).fetchone() is None
+
+
+def test_add_user_course(auth, client):
+    auth.login()
+
+    with client:
+        response = client.post('/admin/add-user-course', data={'user_id': '222222222', 'course_id': '000000000-0'})
+        assert response.status_code == 200
+        response = client.post('/admin/add-user-course', data={'user_id': '222222222', 'course_id': '000000000-0'})
+        assert response.status_code == 403
+        response = client.post('/admin/add-user-course', data={'user_id': '111111112', 'course_id': '000000000-0'})
+        assert response.status_code == 404
+        response = client.post('/admin/add-user-course', data={'user_id': '222222222', 'course_id': '000000000-2'})
+        assert response.status_code == 404
+
+
+def test_delete_user_course(auth, client):
+    auth.login()
+
+    with client:
+        response = client.post('/admin/add-user-course', data={'user_id': '222222222', 'course_id': '000000000-0'})
+        assert response.status_code == 200
+        response = client.post('/admin/delete-user-course', data={'user_id': '111111111', 'course_id': '000000000-0'})
+        assert response.status_code == 200
+        response = client.post('/admin/delete-user-course', data={'user_id': '111111111', 'course_id': '000000000-0'})
+        assert response.status_code == 404
+
+
+def test_get_users(auth, client):
+    auth.login()
+
+    with client:
+        response = client.get('/admin/get-users')
+        assert response.status_code == 200
+        assert len(json.loads(response.data)['users']) == 4

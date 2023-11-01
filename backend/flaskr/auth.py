@@ -60,14 +60,20 @@ def login():
 
     db = get_db()
     user = db.execute(
-        'SELECT * FROM user WHERE id = ?', (int(user_id),)
+        'SELECT * FROM user_data WHERE id = ?', (int(user_id),)
     ).fetchone()
 
     if user is None or not check_password_hash(user['password'], password):
         return incorrect_credentials
 
+    semester = db.execute('SELECT name FROM semester ORDER BY created_at DESC LIMIT 1').fetchone()
+
+    if semester is None:
+        return {"error": "אין סמסטר במערכת"}, 500
+
     session.clear()
     user = dict(user)
+    user['semester'] = semester[0]
     user['is_student'] = bool(user['is_student'])
     session['user'] = user
     return {}, 200
@@ -97,7 +103,7 @@ def change_password():
     db = get_db()
     new_password_hash = generate_password_hash(new_password)
     db.execute(
-        "UPDATE user SET password = ? WHERE id == ?",
+        "UPDATE user_data SET password = ? WHERE id == ?",
         (new_password_hash, session['user']['id']),
     )
     db.commit()

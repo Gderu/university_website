@@ -7,7 +7,7 @@ from werkzeug.security import generate_password_hash
 import logging
 
 from flaskr.db import get_db
-from flaskr.auth import admin_required
+from flaskr.auth import admin_required, Permissions
 
 PASSWORD_LENGTH = 6
 INCORRECT_VALUES = {"error": "נתונים לא נכונים"}, 400
@@ -35,6 +35,7 @@ def add_course(course_data=None):
         semester_name = course_data['semester_name']
         id = course_data['id']
         name = course_data['name']
+        lecturer_id = course_data['id']
     except KeyError:
         return {"error": "בקשה לא תקינה"}, 400
 
@@ -43,19 +44,29 @@ def add_course(course_data=None):
         return INCORRECT_VALUES
 
     db = get_db()
-    semester_names = [row[0] for row in db.execute('SELECT name FROM semester').fetchall()]
-    if semester_name not in semester_names:
+    result = db.execute('SELECT name FROM semester WHERE name == ?',
+                                                   (semester_name,)).fetchone()
+    if result is None:
         return {"error": "סמסטר לא תקין"}, 400
+
+    result = db.execute('SELECT role FROM user_data WHERE id == ?', (lecturer_id,)).fetchone()
+    if result is None or Permissions(result[0]) != Permissions.LECTURER:
+        return {"error": "מזהה מרצה לא תקין"}, 403
 
     try:
         db.execute(
-            'INSERT INTO course (id, name, points, num_students, num_exercises, used_exercises, semester_name)'
-            'VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (id, name, points, num_students, num_exercises, used_exercises, semester_name)
+            'INSERT INTO course (id, name, points, num_students, num_exercises, '
+            'used_exercises, semester_name, lecturer_id)'
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (id, name, float(points), int(num_students), int(num_exercises),
+             int(used_exercises), semester_name, lecturer_id)
         )
         db.commit()
-    except db.IntegrityError:
-        return {"error": "קורס עם מספר זה כבר קיים במערכת"}, 403
+    except db.IntegrityError as e:
+        if 'lecturer_id' in str(e):
+            return {"error": "מזהה מרצה זה לא קיים במערכת"}, 404
+        else:
+            return {"error": "קורס עם מספר זה כבר קיים במערכת"}, 403
     return {}, 200
 
 
@@ -63,7 +74,7 @@ def add_course(course_data=None):
 @admin_required
 def update_course(new_course_data=None):
     if new_course_data is None:
-        new_course_data = request.form
+        new_course_data = dict(request.form)
     if 'id' not in new_course_data:
         return INCORRECT_VALUES
 
@@ -91,12 +102,21 @@ def update_course(new_course_data=None):
             or not re.fullmatch(r'[0-9]*(\.[0-9]+)|[0-9]+', course['points']):
         return INCORRECT_VALUES
 
+    result = db.execute('SELECT name FROM semester WHERE name == ?',
+                        (course['semester_name'],)).fetchone()
+    if result is None:
+        return {"error": "סמסטר לא תקין"}, 400
+
+    result = db.execute('SELECT role FROM user_data WHERE id == ?', (course['lecturer_id'],)).fetchone()
+    if result is None or Permissions(result[0]) != Permissions.LECTURER:
+        return {"error": "מזהה מרצה לא תקין"}, 403
+
     try:
         db.execute(
-            'UPDATE course SET id = ?, name = ?, points = ?, num_students = ?, '
-            'num_exercises = ?, used_exercises = ?, semester_name = ?',
-            (course['id'], course['name'], course['points'], course['num_students'],
-             course['num_exercises'], course['used_exercises'], course['semester_name'])
+            'UPDATE course SET name = ?, points = ?, num_students = ?, '
+            'num_exercises = ?, used_exercises = ?, semester_name = ?, lecturer_id = ? WHERE id == ?',
+            (course['name'], float(course['points']), int(course['num_students']), int(course['num_exercises']),
+             int(course['used_exercises']), course['semester_name'], course['lecturer_id'], course['id'])
         )
         db.commit()
     except db.IntegrityError:
@@ -158,7 +178,7 @@ def add_user(user_data=None):
     db = get_db()
     try:
         db.execute(
-            "INSERT INTO user (id, password, name, mail, role, is_student) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO user_data (id, password, name, mail, role, is_student) VALUES (?, ?, ?, ?, ?, ?)",
             (int(user_id), generate_password_hash(password), name, mail, int(role), bool(int(is_student))),
         )
         db.commit()
@@ -185,7 +205,7 @@ def update_user(user_data=None):
 
     db = get_db()
     user = db.execute(
-        'SELECT * FROM user WHERE id = ?',
+        'SELECT * FROM user_data WHERE id = ?',
         (int(user_data['id']),)
     ).fetchone()
     if user is None:
@@ -214,7 +234,7 @@ def update_user(user_data=None):
     db = get_db()
     try:
         db.execute(
-            "UPDATE user SET password = ?, name = ?, mail = ?, role = ?, is_student = ? WHERE id == ?",
+            "UPDATE user_data SET password = ?, name = ?, mail = ?, role = ?, is_student = ? WHERE id == ?",
             (generate_password_hash(user['password']), user['name'], user['mail'],
              int(user['role']), bool(int(user['is_student'])), int(user['id']), ),
         )
@@ -242,11 +262,67 @@ def delete_user(to_delete=None):
         return INCORRECT_VALUES
 
     db = get_db()
-    exists = db.execute('SELECT 1 FROM user WHERE id = ?', (int(to_delete),)).fetchone()
+    exists = db.execute('SELECT 1 FROM user_data WHERE id = ?', (int(to_delete),)).fetchone()
     if not exists:
         return {"error": "משתמש לא נמצא"}, 404
 
-    db.execute('DELETE FROM user WHERE id = ?', (int(to_delete),))
+    db.execute('DELETE FROM user_data WHERE id = ?', (int(to_delete),))
+    db.commit()
+    return {}, 200
+
+
+@bp.route('/add-user-course', methods=['POST'])
+@admin_required
+def add_user_course(user_data=None):
+    if user_data is None:
+        user_data = request.form
+    try:
+        user_id = user_data['user_id']
+        course_id = user_data['course_id']
+    except KeyError:
+        return INCORRECT_VALUES
+
+    if not user_id.isdigit():
+        return INCORRECT_VALUES
+
+    db = get_db()
+    try:
+        db.execute('INSERT INTO user_course_privileges(user_id, course_id) '
+                   'VALUES (?, ?)',
+                   (int(user_id), course_id))
+        db.commit()
+    except db.IntegrityError as e:
+        if 'UNIQUE' in str(e):
+            return {'error': 'קשר זה כבר קיים במערכת'}, 403
+        else:
+            if db.execute('SELECT 1 FROM user_data WHERE id == ?', (int(user_id),)).fetchone() is None:
+                return {'error': 'קורס זה אינו קיים במערכת'}, 404
+            else:
+                return {'error': 'משתמש זה אינו קיים במערכת'}, 404
+
+    return {}, 200
+
+
+@bp.route('/delete-user-course', methods=['POST'])
+@admin_required
+def delete_user_course(to_delete=None):
+    if to_delete is None:
+        to_delete = request.form
+    try:
+        user_id = to_delete['user_id']
+        course_id = to_delete['course_id']
+    except KeyError:
+        return INCORRECT_VALUES
+
+    if not user_id.isdigit():
+        return INCORRECT_VALUES
+
+    db = get_db()
+    if db.execute('SELECT * FROM user_course_privileges WHERE user_id == ? AND course_id == ?', (int(user_id), course_id)).fetchone() is None:
+        return {"error": "ערך זה לא נמצא במאגר מידע"}, 404
+
+    db.execute('DELETE FROM user_course_privileges WHERE user_id == ? AND course_id == ?',
+               (int(user_id), course_id))
     db.commit()
     return {}, 200
 
@@ -255,3 +331,11 @@ def delete_user(to_delete=None):
 @admin_required
 def add_batch_users():
     pass
+
+
+@bp.route('/get-users', methods=['GET'])
+@admin_required
+def get_users():
+    db = get_db()
+    users = db.execute('SELECT * FROM user_data', ).fetchall()
+    return {'users': [dict(row) for row in users]}, 200

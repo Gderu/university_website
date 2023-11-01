@@ -7,6 +7,7 @@ from . import db
 from . import auth
 from . import exercise_checks
 from . import admin_actions
+from . import access_data
 
 
 def create_app(test_config=None):
@@ -34,6 +35,7 @@ def create_app(test_config=None):
     app.register_blueprint(auth.bp)
     app.register_blueprint(exercise_checks.bp)
     app.register_blueprint(admin_actions.bp)
+    app.register_blueprint(access_data.bp)
 
     @app.route('/hello')
     def hello():
